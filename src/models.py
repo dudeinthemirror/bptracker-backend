@@ -1,5 +1,5 @@
 """SQLAlchemy ORM models."""
-from sqlalchemy import Column, Integer, DateTime, func
+from sqlalchemy import Column, Integer, DateTime, String, func
 from sqlalchemy.ext.declarative import declarative_base
 
 from .database import Base
@@ -15,3 +15,4 @@ class BloodPressureReading(Base):
     diastolic = Column(Integer, nullable=False)
     heart_rate = Column(Integer, nullable=False)
     timestamp = Column(DateTime, default=func.now(), nullable=False)
+    note = Column(String, nullable=True)

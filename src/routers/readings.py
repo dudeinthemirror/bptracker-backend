@@ -58,6 +58,7 @@ def create_reading(
         diastolic=reading.diastolic,
         heart_rate=reading.heart_rate,
         timestamp=reading.timestamp or datetime.now(),
+        note=reading.note,
     )
     
     db.add(db_reading)

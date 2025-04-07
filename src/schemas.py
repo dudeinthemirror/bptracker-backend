@@ -11,6 +11,7 @@ class BloodPressureReadingBase(BaseModel):
     systolic: int = Field(..., ge=40, le=300, description="Systolic blood pressure in mmHg")
     diastolic: int = Field(..., ge=20, le=200, description="Diastolic blood pressure in mmHg")
     heart_rate: int = Field(..., ge=20, le=250, description="Heart rate in BPM")
+    note: Optional[str] = Field(None, description="Optional note about the reading")
 
 
 class BloodPressureReadingCreate(BloodPressureReadingBase):
