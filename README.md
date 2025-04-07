@@ -1,6 +1,8 @@
+NOTE: this was built almost entirely by Cline (with Claude 3.7 Sonnet). The intent was to test Cline's agentic capabilities. Conclusion: they are quite impressive! "Meesa likes!"
+
 # BPTracker Backend
 
-A FastAPI backend for the BPTracker application that stores blood pressure readings in a SQLite database.
+A FastAPI backend for the [BPTracker application](git@github.com:dudeinthemirror/bptracker.git) that stores blood pressure readings in a SQLite database.
 
 ## Features
 
@@ -35,17 +37,17 @@ uv sync
 Start the development server:
 
 ```bash
-uv run uvicorn src.main:app --reload --host 127.0.0.1 --port 8000
+uv run fastapi dev src/main.py --host 127.0.0.1 --port 8078
 ```
 
-The API will be available at http://localhost:8000
+The API will be available at http://localhost:8078
 
 ## API Documentation
 
 Once the server is running, you can access the interactive API documentation at:
 
-- Swagger UI: http://localhost:8000/docs
-- ReDoc: http://localhost:8000/redoc
+- Swagger UI: http://localhost:8078/docs
+- ReDoc: http://localhost:8078/redoc
 
 ## API Endpoints
 
