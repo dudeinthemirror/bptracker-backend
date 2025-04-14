@@ -34,13 +34,20 @@ uv sync
 
 ## Running the Server
 
-Start the development server:
+The project includes a convenient script to manage both the PostgreSQL database and the API server. Use the following command to start both services:
 
 ```bash
-uv run fastapi dev src/main.py --host 127.0.0.1 --port 8078
+python scripts/local_server.py start
 ```
 
-The API will be available at http://localhost:8078
+The API will be available at http://127.0.0.1:8078
+
+You can also use the script to:
+
+- Stop all services: `python scripts/local_server.py stop`
+- Restart all services: `python scripts/local_server.py restart`
+- Check service status: `python scripts/local_server.py status`
+- View all available commands: `python scripts/local_server.py --help`
 
 ## API Documentation
 
@@ -80,19 +87,28 @@ The application uses PostgreSQL for data storage. You'll need to set up a Postgr
 
 The application will use the environment variables to connect to your PostgreSQL database when it starts.
 
-### Starting PostgreSQL
+### Database Management
 
-To start a local PostgreSQL database:
+The `local_server.py` script handles PostgreSQL database management automatically. It uses `pg_ctl` to control the PostgreSQL server:
 
 ```bash
-# Start as a service (recommended)
-brew services start postgresql@14
+# Start PostgreSQL and the API server
+python scripts/local_server.py start
 
-# Or run directly without a service
-/opt/homebrew/opt/postgresql@14/bin/postgres -D /opt/homebrew/var/postgresql@14
+# Stop PostgreSQL and the API server
+python scripts/local_server.py stop
+
+# Check if PostgreSQL and the API server are running
+python scripts/local_server.py status
 ```
 
 If you don't have PostgreSQL installed, run `brew install postgresql@14` first.
+
+For more detailed information about the script's commands:
+
+```bash
+python scripts/local_server.py --help
+```
 
 ### Migrating from SQLite to PostgreSQL
 
