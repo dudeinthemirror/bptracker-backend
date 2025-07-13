@@ -1,0 +1,1216 @@
+This file is a merged representation of the entire codebase, combined into a single document by Repomix.
+
+<file_summary>
+This section contains a summary of this file.
+
+<purpose>
+This file contains a packed representation of the entire repository's contents.
+It is designed to be easily consumable by AI systems for analysis, code review,
+or other automated processes.
+</purpose>
+
+<file_format>
+The content is organized as follows:
+1. This summary section
+2. Repository information
+3. Directory structure
+4. Repository files (if enabled)
+5. Multiple file entries, each consisting of:
+  - File path as an attribute
+  - Full contents of the file
+</file_format>
+
+<usage_guidelines>
+- This file should be treated as read-only. Any changes should be made to the
+  original repository files, not this packed version.
+- When processing this file, use the file path to distinguish
+  between different files in the repository.
+- Be aware that this file may contain sensitive information. Handle it with
+  the same level of security as you would the original repository.
+</usage_guidelines>
+
+<notes>
+- Some files may have been excluded based on .gitignore rules and Repomix's configuration
+- Binary files are not included in this packed representation. Please refer to the Repository Structure section for a complete list of file paths, including binary files
+- Files matching patterns in .gitignore are excluded
+- Files matching default ignore patterns are excluded
+- Files are sorted by Git change count (files with more changes are at the bottom)
+</notes>
+
+</file_summary>
+
+<directory_structure>
+scripts/
+  __init__.py
+  local_server.py
+  migrate_sqlite_to_postgres.py
+src/
+  routers/
+    __init__.py
+    readings.py
+  __init__.py
+  database.py
+  main.py
+  models.py
+  schemas.py
+.envrc
+.gitignore
+.python-version
+LICENSE
+pyproject.toml
+README.md
+repomix.config.json
+</directory_structure>
+
+<files>
+This section contains the contents of the repository's files.
+
+<file path="repomix.config.json">
+{
+  "$schema": "https://repomix.com/schemas/latest/schema.json",
+  "input": {
+    "maxFileSize": 52428800
+  },
+  "output": {
+    "filePath": "repomix-output.xml",
+    "style": "xml",
+    "parsableStyle": false,
+    "fileSummary": true,
+    "directoryStructure": true,
+    "files": true,
+    "removeComments": false,
+    "removeEmptyLines": false,
+    "compress": false,
+    "topFilesLength": 5,
+    "showLineNumbers": false,
+    "copyToClipboard": false,
+    "git": {
+      "sortByChanges": true,
+      "sortByChangesMaxCommits": 100,
+      "includeDiffs": false
+    }
+  },
+  "include": [],
+  "ignore": {
+    "useGitignore": true,
+    "useDefaultPatterns": true,
+    "customPatterns": []
+  },
+  "security": {
+    "enableSecurityCheck": true
+  },
+  "tokenCount": {
+    "encoding": "o200k_base"
+  }
+}
+</file>
+
+<file path="scripts/__init__.py">
+"""Migration scripts package."""
+</file>
+
+<file path="scripts/local_server.py">
+#!/usr/bin/env python
+"""
+Local server management script for BPTracker.
+
+This script provides commands to start, stop, and restart both
+the PostgreSQL database and the BPTracker backend server.
+"""
+import errno
+import os
+import signal
+import socket
+import subprocess
+import sys
+import time
+from pathlib import Path
+from typing import Optional
+
+import typer
+from dotenv import load_dotenv
+
+# Create Typer app
+app = typer.Typer(help="Manage local BPTracker servers", add_completion=False)
+
+# Add the parent directory to the path so we can import from src if needed
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
+
+# Load environment variables
+load_dotenv()
+
+# Get PostgreSQL configuration from environment variables
+DB_USER = os.getenv("POSTGRES_USER", "postgres")
+DB_PASSWORD = os.getenv("POSTGRES_PASSWORD", "postgres")
+DB_HOST = os.getenv("POSTGRES_HOST", "localhost")
+DB_PORT = os.getenv("POSTGRES_PORT", "5432")
+DB_NAME = os.getenv("POSTGRES_DB", "bptracker")
+
+# Backend server configuration
+BACKEND_HOST = "127.0.0.1"
+BACKEND_PORT = 8078
+
+# Store process IDs in the project directory for better persistence
+PROJECT_ROOT = Path(__file__).parent.parent
+PG_PID_FILE = PROJECT_ROOT / "pg.pid"
+BACKEND_PID_FILE = PROJECT_ROOT / "backend.pid"
+
+
+def is_process_running(pid: int) -> bool:
+    """Check if a process with the given PID is running."""
+    try:
+        os.kill(pid, 0)
+        return True
+    except OSError as e:
+        # Process doesn't exist
+        if e.errno == errno.ESRCH:
+            return False
+        # Process exists but we don't have permission to send signals to it
+        elif e.errno == errno.EPERM:
+            return True
+        # Some other error
+        else:
+            return False
+
+
+def get_pid_from_file(pid_file: Path) -> Optional[int]:
+    """Get PID from a PID file if it exists and the process is running."""
+    if pid_file.exists():
+        try:
+            pid = int(pid_file.read_text().strip())
+            if is_process_running(pid):
+                return pid
+        except (ValueError, IOError):
+            pass
+    return None
+
+
+def is_port_in_use(host: str, port: int) -> bool:
+    """Check if a port is in use by attempting to connect to it."""
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+        try:
+            s.settimeout(1)
+            s.connect((host, port))
+            return True
+        except (socket.timeout, ConnectionRefusedError):
+            return False
+
+
+def save_pid_to_file(pid_file: Path, pid: int) -> None:
+    """Save PID to a file."""
+    try:
+        # Ensure the parent directory exists
+        pid_file.parent.mkdir(parents=True, exist_ok=True)
+        
+        # Write the PID to the file
+        with open(pid_file, 'w') as f:
+            f.write(str(pid))
+        
+        # Verify the file was created
+        if pid_file.exists():
+            typer.echo(f"Successfully saved PID {pid} to {pid_file}")
+        else:
+            typer.echo(f"Warning: PID file {pid_file} was not created")
+    except Exception as e:
+        typer.echo(f"Warning: Failed to save PID to {pid_file}: {e}")
+
+
+def kill_process(pid: int, force: bool = False) -> bool:
+    """Kill a process with the given PID."""
+    try:
+        if force:
+            os.kill(pid, signal.SIGKILL)
+        else:
+            os.kill(pid, signal.SIGTERM)
+        return True
+    except OSError as e:
+        # Process doesn't exist - consider this a success since the goal was to ensure the process is not running
+        if e.errno == errno.ESRCH:
+            return True
+        # Process exists but we don't have permission
+        elif e.errno == errno.EPERM:
+            return False
+        # Some other error
+        else:
+            return False
+
+
+def start_postgresql() -> bool:
+    """Start PostgreSQL database server."""
+    # Check if PostgreSQL is already running
+    if is_port_in_use(DB_HOST, int(DB_PORT)):
+        typer.echo(f"PostgreSQL is already running on port {DB_PORT}")
+        return True
+
+    try:
+        typer.echo("Starting PostgreSQL...")
+        # Use pg_ctl to start PostgreSQL with -w (wait) flag and redirect logs to /dev/null
+        result = subprocess.run(
+            [
+                "pg_ctl", 
+                "-D", "/opt/homebrew/var/postgresql@14", 
+                "-l", "/dev/null", 
+                "-w",  # Wait for startup to complete
+                "start"
+            ],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            check=False,
+        )
+        
+        # Check if PostgreSQL started successfully
+        if result.returncode == 0 and is_port_in_use(DB_HOST, int(DB_PORT)):
+            typer.echo(f"PostgreSQL is running on port {DB_PORT}")
+            return True
+        else:
+            typer.echo(f"Failed to start PostgreSQL: {result.stderr}")
+            return False
+    except Exception as e:
+        typer.echo(f"Error starting PostgreSQL: {e}")
+        return False
+
+
+def stop_postgresql() -> bool:
+    """Stop PostgreSQL database server."""
+    # Check if PostgreSQL is running
+    if not is_port_in_use(DB_HOST, int(DB_PORT)):
+        typer.echo("PostgreSQL is not running")
+        return True
+    
+    try:
+        # Stop PostgreSQL using pg_ctl with -w (wait) flag
+        typer.echo("Stopping PostgreSQL...")
+        result = subprocess.run(
+            [
+                "pg_ctl", 
+                "-D", "/opt/homebrew/var/postgresql@14", 
+                "-w",  # Wait for shutdown to complete
+                "stop"
+            ],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            check=False,
+        )
+        
+        # Check if PostgreSQL stopped successfully
+        if result.returncode == 0 and not is_port_in_use(DB_HOST, int(DB_PORT)):
+            typer.echo("PostgreSQL stopped successfully")
+            return True
+        else:
+            typer.echo(f"Failed to stop PostgreSQL: {result.stderr}")
+            return False
+    except Exception as e:
+        typer.echo(f"Error stopping PostgreSQL: {e}")
+        return False
+
+
+def start_backend() -> bool:
+    """Start BPTracker backend server."""
+    # Check if backend is already running
+    backend_pid = get_pid_from_file(BACKEND_PID_FILE)
+    if backend_pid:
+        typer.echo(f"Backend server is already running (PID: {backend_pid})")
+        return True
+    
+    # Check if port is in use, which means backend might be running without a PID file
+    if is_port_in_use(BACKEND_HOST, BACKEND_PORT):
+        typer.echo(f"Backend server is already running on port {BACKEND_PORT} (PID file not found)")
+        typer.echo(f"API available at http://{BACKEND_HOST}:{BACKEND_PORT}")
+        return True
+    
+    try:
+        # Start the backend server
+        typer.echo("Starting BPTracker backend server...")
+        
+        process = subprocess.Popen(
+            [
+                "python", "-m", "uvicorn", 
+                "src.main:app", 
+                "--host", BACKEND_HOST, 
+                "--port", str(BACKEND_PORT)
+            ],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            start_new_session=True,
+            cwd=PROJECT_ROOT,
+        )
+        
+        # Save PID to file
+        save_pid_to_file(BACKEND_PID_FILE, process.pid)
+        
+        # Wait to ensure it starts properly
+        typer.echo("Waiting for backend server to start...")
+        for i in range(20):  # Try for up to 10 seconds (20 * 0.5s)
+            time.sleep(0.5)
+            if is_port_in_use(BACKEND_HOST, BACKEND_PORT):
+                typer.echo(f"Backend server is running on port {BACKEND_PORT}")
+                typer.echo(f"API available at http://{BACKEND_HOST}:{BACKEND_PORT}")
+                return True
+            # Print a dot every second to show progress
+            if i % 2 == 0:
+                typer.echo(".", nl=False)
+        
+        typer.echo("")  # New line after dots
+        
+        # If we get here, the server didn't start properly
+        if is_process_running(process.pid):
+            typer.echo("Process is running but port is not active. Server might not have started correctly.")
+            # Print any error output from the process
+            try:
+                stderr_output = process.stderr.read().decode('utf-8')
+                if stderr_output:
+                    typer.echo(f"Server error output: {stderr_output}")
+            except Exception:
+                pass
+            
+            # Kill the process since it's not working correctly
+            kill_process(process.pid, force=True)
+            if BACKEND_PID_FILE.exists():
+                BACKEND_PID_FILE.unlink()
+                typer.echo(f"Removed PID file {BACKEND_PID_FILE}")
+            return False
+        else:
+            typer.echo("Failed to start backend server")
+            # Clean up PID file if process didn't start successfully
+            if BACKEND_PID_FILE.exists():
+                BACKEND_PID_FILE.unlink()
+                typer.echo(f"Removed PID file {BACKEND_PID_FILE}")
+            return False
+    except Exception as e:
+        typer.echo(f"Error starting backend server: {e}")
+        # Clean up PID file if there was an error
+        if BACKEND_PID_FILE.exists():
+            BACKEND_PID_FILE.unlink()
+            typer.echo(f"Removed PID file {BACKEND_PID_FILE}")
+        return False
+
+
+def stop_backend() -> bool:
+    """Stop BPTracker backend server."""
+    backend_pid = get_pid_from_file(BACKEND_PID_FILE)
+    
+    if not backend_pid:
+        # Check if backend is running without a PID file
+        if is_port_in_use(BACKEND_HOST, BACKEND_PORT):
+            typer.echo("Backend server is running but was not started by this script (no PID file)")
+            typer.echo("Please stop the backend server manually")
+            return False
+        else:
+            typer.echo("Backend server is not running")
+            return True
+    
+    try:
+        # Stop the backend server by killing the process
+        typer.echo(f"Stopping backend server (PID: {backend_pid})...")
+        if kill_process(int(backend_pid)):
+            typer.echo("Backend server stopped successfully")
+            BACKEND_PID_FILE.unlink(missing_ok=True)
+            return True
+        else:
+            typer.echo("Failed to stop backend server, trying force kill...")
+            if kill_process(int(backend_pid), force=True):
+                typer.echo("Backend server force stopped successfully")
+                BACKEND_PID_FILE.unlink(missing_ok=True)
+                return True
+            else:
+                typer.echo("Failed to stop backend server")
+                return False
+    except Exception as e:
+        typer.echo(f"Error stopping backend server: {e}")
+        return False
+
+
+@app.command()
+def start():
+    """Start PostgreSQL and BPTracker backend server."""
+    pg_success = start_postgresql()
+    backend_success = start_backend()
+    
+    if pg_success and backend_success:
+        typer.echo("All services started successfully")
+    else:
+        typer.echo("Some services failed to start")
+
+
+@app.command()
+def stop():
+    """Stop PostgreSQL and BPTracker backend server."""
+    backend_success = stop_backend()
+    pg_success = stop_postgresql()
+    
+    if pg_success and backend_success:
+        typer.echo("All services stopped successfully")
+    else:
+        typer.echo("Some services failed to stop")
+
+
+@app.command()
+def restart():
+    """Restart PostgreSQL and BPTracker backend server."""
+    typer.echo("Restarting services...")
+    
+    # Check if backend is running without a PID file
+    backend_pid = get_pid_from_file(BACKEND_PID_FILE)
+    backend_port_in_use = is_port_in_use(BACKEND_HOST, BACKEND_PORT)
+    
+    # If backend is running without a PID file, we can't restart it
+    if not backend_pid and backend_port_in_use:
+        typer.echo("Backend server is running but was not started by this script (no PID file)")
+        typer.echo("Please stop the backend server manually before restarting")
+        return
+    
+    # Stop services
+    backend_stopped = stop_backend()
+    pg_stopped = stop_postgresql()
+    
+    if not backend_stopped or not pg_stopped:
+        typer.echo("Failed to stop some services, cannot restart")
+        return
+    
+    # Wait a moment before starting again
+    time.sleep(2)
+    
+    # Start services
+    pg_success = start_postgresql()
+    backend_success = start_backend()
+    
+    if pg_success and backend_success:
+        typer.echo("All services restarted successfully")
+    else:
+        typer.echo("Some services failed to restart")
+
+
+@app.command()
+def status():
+    """Check the status of PostgreSQL and BPTracker backend server."""
+    # Check PostgreSQL status
+    pg_port_in_use = is_port_in_use(DB_HOST, int(DB_PORT))
+    
+    if pg_port_in_use:
+        typer.echo(f"PostgreSQL: Running (Port {DB_PORT} is active)")
+    else:
+        typer.echo("PostgreSQL: Not running")
+    
+    # Check backend status
+    backend_pid = get_pid_from_file(BACKEND_PID_FILE)
+    backend_port_in_use = is_port_in_use(BACKEND_HOST, BACKEND_PORT)
+    
+    # Debug information about PID file
+    typer.echo(f"Debug: PID file location: {BACKEND_PID_FILE}")
+    if BACKEND_PID_FILE.exists():
+        try:
+            pid_content = BACKEND_PID_FILE.read_text().strip()
+            typer.echo(f"Debug: PID file exists with content: {pid_content}")
+            try:
+                pid = int(pid_content)
+                if is_process_running(pid):
+                    typer.echo(f"Debug: Process with PID {pid} is running")
+                else:
+                    typer.echo(f"Debug: Process with PID {pid} is NOT running")
+            except ValueError:
+                typer.echo(f"Debug: PID file contains invalid content")
+        except Exception as e:
+            typer.echo(f"Debug: Error reading PID file: {e}")
+    else:
+        typer.echo("Debug: PID file does not exist")
+    
+    typer.echo(f"Debug: Port {BACKEND_PORT} is {'in use' if backend_port_in_use else 'NOT in use'}")
+    
+    # Determine backend status based on port usage if PID file is missing
+    if backend_pid and is_port_in_use(BACKEND_HOST, BACKEND_PORT):
+        typer.echo(f"Backend server: Running (PID: {backend_pid})")
+        typer.echo(f"API available at http://{BACKEND_HOST}:{BACKEND_PORT}")
+    elif backend_port_in_use:
+        # If port is in use but no PID file, create a PID file for the process using the port
+        typer.echo(f"Backend server: Running (Port {BACKEND_PORT} is active, but PID file not found)")
+        typer.echo(f"API available at http://{BACKEND_HOST}:{BACKEND_PORT}")
+        
+        # Try to find the process using this port and save its PID
+        try:
+            # On macOS, use lsof to find the process using the port
+            result = subprocess.run(
+                ["lsof", "-i", f":{BACKEND_PORT}", "-t"],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                check=False,
+            )
+            if result.returncode == 0 and result.stdout.strip():
+                pid = int(result.stdout.strip().split("\n")[0])
+                typer.echo(f"Debug: Found process with PID {pid} using port {BACKEND_PORT}")
+                if is_process_running(pid):
+                    save_pid_to_file(BACKEND_PID_FILE, pid)
+                    typer.echo(f"Debug: Saved PID {pid} to {BACKEND_PID_FILE}")
+        except Exception as e:
+            typer.echo(f"Debug: Error finding process for port {BACKEND_PORT}: {e}")
+    elif backend_pid:
+        typer.echo(f"Backend server: Process with PID {backend_pid} exists but is not listening on port {BACKEND_PORT}")
+        # Clean up the PID file since the process isn't working correctly
+        BACKEND_PID_FILE.unlink(missing_ok=True)
+        typer.echo("Removed invalid PID file")
+    else:
+        typer.echo("Backend server: Not running")
+
+
+if __name__ == "__main__":
+    app()
+</file>
+
+<file path="scripts/migrate_sqlite_to_postgres.py">
+#!/usr/bin/env python
+"""
+Migration script to transfer data from SQLite to PostgreSQL.
+
+This script reads all blood pressure readings from the SQLite database
+and inserts them into the PostgreSQL database.
+"""
+import os
+import sys
+import sqlite3
+from datetime import datetime
+from dotenv import load_dotenv
+
+# Add the parent directory to the path so we can import from src
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
+
+# Import SQLAlchemy models and database connection
+from src.models import BloodPressureReading
+from src.database import SessionLocal, engine, Base
+
+# Load environment variables
+load_dotenv()
+
+# Path to SQLite database
+SQLITE_DB_PATH = "bptracker.db"
+
+
+def migrate_data():
+    """Migrate data from SQLite to PostgreSQL."""
+    # Check if SQLite database exists
+    if not os.path.exists(SQLITE_DB_PATH):
+        print(f"SQLite database not found at {SQLITE_DB_PATH}")
+        return
+
+    # Connect to SQLite database
+    sqlite_conn = sqlite3.connect(SQLITE_DB_PATH)
+    sqlite_conn.row_factory = sqlite3.Row
+    sqlite_cursor = sqlite_conn.cursor()
+
+    # Create tables in PostgreSQL if they don't exist
+    Base.metadata.create_all(bind=engine)
+
+    # Get a session for PostgreSQL
+    db = SessionLocal()
+
+    try:
+        # Get all readings from SQLite
+        sqlite_cursor.execute("SELECT * FROM blood_pressure_readings")
+        readings = sqlite_cursor.fetchall()
+
+        print(f"Found {len(readings)} readings in SQLite database")
+
+        # Insert readings into PostgreSQL
+        for reading in readings:
+            # Convert SQLite row to dict
+            reading_dict = dict(reading)
+            
+            # Create new reading object
+            new_reading = BloodPressureReading(
+                id=reading_dict["id"],
+                systolic=reading_dict["systolic"],
+                diastolic=reading_dict["diastolic"],
+                heart_rate=reading_dict["heart_rate"],
+                timestamp=datetime.fromisoformat(reading_dict["timestamp"]),
+                note=reading_dict["note"]
+            )
+            
+            # Add to session
+            db.add(new_reading)
+        
+        # Commit all changes
+        db.commit()
+        
+        # Update the sequence to start after the highest ID
+        db.execute(
+            "SELECT setval('blood_pressure_readings_id_seq', (SELECT MAX(id) FROM blood_pressure_readings))"
+        )
+        db.commit()
+        
+        print(f"Successfully migrated {len(readings)} readings to PostgreSQL")
+
+    except Exception as e:
+        print(f"Error during migration: {e}")
+        db.rollback()
+    finally:
+        # Close connections
+        db.close()
+        sqlite_conn.close()
+
+
+if __name__ == "__main__":
+    print("Starting migration from SQLite to PostgreSQL...")
+    migrate_data()
+    print("Migration complete")
+</file>
+
+<file path="src/routers/__init__.py">
+"""API routers."""
+</file>
+
+<file path="src/__init__.py">
+"""BPTracker Backend API."""
+</file>
+
+<file path="src/main.py">
+"""Main FastAPI application."""
+from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
+
+from . import models
+from .database import engine
+from .routers import readings
+
+# Create database tables
+models.Base.metadata.create_all(bind=engine)
+
+# Create FastAPI app
+app = FastAPI(
+    title="BPTracker API",
+    description="API for tracking blood pressure readings",
+    version="0.1.0",
+)
+
+# Add CORS middleware
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],  # Allow all origins
+    allow_credentials=True,
+    allow_methods=["*"],  # Allow all methods
+    allow_headers=["*"],  # Allow all headers
+)
+
+# Include routers
+app.include_router(readings.router)
+
+
+@app.get("/")
+def read_root():
+    """
+    Root endpoint.
+    
+    Returns:
+        dict: Status message
+    """
+    return {"status": "BPTracker API is running"}
+
+
+@app.get("/health")
+def health_check():
+    """
+    Health check endpoint.
+    
+    Returns:
+        dict: Health status
+    """
+    return {"status": "healthy"}
+</file>
+
+<file path=".envrc">
+layout_uv() {
+  local venv_path=".venv"
+  if [ ! -d "$venv_path" ]; then
+    uv venv
+  fi
+  source "$venv_path/bin/activate"
+}
+
+layout uv
+
+PYTHON_VERSION="$(python --version)"
+echo "$(tput setaf 3)Virtual env (.venv) $PYTHON_VERSION activated $(tput sgr0)"
+</file>
+
+<file path=".python-version">
+3.11.4
+</file>
+
+<file path="LICENSE">
+MIT License
+
+Copyright (c) 2025 Luc Masalar
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+</file>
+
+<file path="src/routers/readings.py">
+"""API endpoints for blood pressure readings."""
+from typing import List, Optional
+from datetime import datetime
+
+from fastapi import APIRouter, Depends, HTTPException, Query
+from sqlalchemy.orm import Session
+
+from .. import models, schemas
+from ..database import get_db
+
+router = APIRouter(
+    prefix="/readings",
+    tags=["readings"],
+)
+
+
+@router.get("/", response_model=schemas.BloodPressureReadingList)
+def get_readings(
+    skip: int = Query(0, ge=0, description="Number of readings to skip"),
+    limit: int = Query(100, ge=1, le=100, description="Maximum number of readings to return"),
+    db: Session = Depends(get_db),
+):
+    """
+    Get all blood pressure readings.
+    
+    Args:
+        skip: Number of readings to skip
+        limit: Maximum number of readings to return
+        db: Database session
+        
+    Returns:
+        List of blood pressure readings
+    """
+    readings = db.query(models.BloodPressureReading).order_by(
+        models.BloodPressureReading.timestamp.desc()
+    ).offset(skip).limit(limit).all()
+    
+    return {"readings": readings}
+
+
+@router.post("/", response_model=schemas.BloodPressureReading, status_code=201)
+def create_reading(
+    reading: schemas.BloodPressureReadingCreate,
+    db: Session = Depends(get_db),
+):
+    """
+    Create a new blood pressure reading.
+    
+    Args:
+        reading: Blood pressure reading data
+        db: Database session
+        
+    Returns:
+        Created blood pressure reading
+    """
+    db_reading = models.BloodPressureReading(
+        systolic=reading.systolic,
+        diastolic=reading.diastolic,
+        heart_rate=reading.heart_rate,
+        timestamp=reading.timestamp or datetime.now(),
+        note=reading.note,
+    )
+    
+    db.add(db_reading)
+    db.commit()
+    db.refresh(db_reading)
+    
+    return db_reading
+
+
+@router.get("/{reading_id}", response_model=schemas.BloodPressureReading)
+def get_reading(
+    reading_id: int,
+    db: Session = Depends(get_db),
+):
+    """
+    Get a specific blood pressure reading by ID.
+    
+    Args:
+        reading_id: ID of the reading to get
+        db: Database session
+        
+    Returns:
+        Blood pressure reading
+        
+    Raises:
+        HTTPException: If reading not found
+    """
+    reading = db.query(models.BloodPressureReading).filter(
+        models.BloodPressureReading.id == reading_id
+    ).first()
+    
+    if reading is None:
+        raise HTTPException(status_code=404, detail="Reading not found")
+    
+    return reading
+
+
+@router.delete("/{reading_id}", status_code=204)
+def delete_reading(
+    reading_id: int,
+    db: Session = Depends(get_db),
+):
+    """
+    Delete a specific blood pressure reading by ID.
+    
+    Args:
+        reading_id: ID of the reading to delete
+        db: Database session
+        
+    Raises:
+        HTTPException: If reading not found
+    """
+    reading = db.query(models.BloodPressureReading).filter(
+        models.BloodPressureReading.id == reading_id
+    ).first()
+    
+    if reading is None:
+        raise HTTPException(status_code=404, detail="Reading not found")
+    
+    db.delete(reading)
+    db.commit()
+
+
+@router.delete("/", status_code=204)
+def delete_all_readings(
+    db: Session = Depends(get_db),
+):
+    """
+    Delete all blood pressure readings.
+    
+    Args:
+        db: Database session
+    """
+    db.query(models.BloodPressureReading).delete()
+    db.commit()
+</file>
+
+<file path="src/database.py">
+"""Database connection and session management."""
+import os
+from dotenv import load_dotenv
+from sqlalchemy import create_engine
+from sqlalchemy.ext.declarative import declarative_base
+from sqlalchemy.orm import sessionmaker
+
+# Load environment variables
+load_dotenv()
+
+# PostgreSQL database URL
+DB_USER = os.getenv("POSTGRES_USER", "postgres")
+DB_PASSWORD = os.getenv("POSTGRES_PASSWORD", "postgres")
+DB_HOST = os.getenv("POSTGRES_HOST", "localhost")
+DB_PORT = os.getenv("POSTGRES_PORT", "5432")
+DB_NAME = os.getenv("POSTGRES_DB", "bptracker")
+
+SQLALCHEMY_DATABASE_URL = f"postgresql://{DB_USER}:{DB_PASSWORD}@{DB_HOST}:{DB_PORT}/{DB_NAME}"
+
+# Create SQLAlchemy engine
+engine = create_engine(SQLALCHEMY_DATABASE_URL)
+
+# Create SessionLocal class
+SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
+
+# Create Base class
+Base = declarative_base()
+
+
+def get_db():
+    """
+    Dependency for getting DB session.
+    
+    Yields:
+        Session: Database session
+    """
+    db = SessionLocal()
+    try:
+        yield db
+    finally:
+        db.close()
+</file>
+
+<file path="src/models.py">
+"""SQLAlchemy ORM models."""
+from sqlalchemy import Column, Integer, DateTime, String, func
+from sqlalchemy.ext.declarative import declarative_base
+
+from .database import Base
+
+
+class BloodPressureReading(Base):
+    """SQLAlchemy model for blood pressure readings."""
+
+    __tablename__ = "blood_pressure_readings"
+
+    id = Column(Integer, primary_key=True, index=True)
+    systolic = Column(Integer, nullable=False)
+    diastolic = Column(Integer, nullable=False)
+    heart_rate = Column(Integer, nullable=False)
+    timestamp = Column(DateTime, default=func.now(), nullable=False)
+    note = Column(String, nullable=True)
+</file>
+
+<file path="src/schemas.py">
+"""Pydantic models for request/response validation."""
+from datetime import datetime
+from typing import List, Optional
+
+from pydantic import BaseModel, Field
+
+
+class BloodPressureReadingBase(BaseModel):
+    """Base schema for blood pressure reading."""
+
+    systolic: int = Field(..., ge=40, le=300, description="Systolic blood pressure in mmHg")
+    diastolic: int = Field(..., ge=20, le=200, description="Diastolic blood pressure in mmHg")
+    heart_rate: int = Field(..., ge=20, le=250, description="Heart rate in BPM")
+    note: Optional[str] = Field(None, description="Optional note about the reading")
+
+
+class BloodPressureReadingCreate(BloodPressureReadingBase):
+    """Schema for creating a blood pressure reading."""
+
+    timestamp: Optional[datetime] = Field(None, description="Timestamp of the reading")
+
+
+class BloodPressureReading(BloodPressureReadingBase):
+    """Schema for a blood pressure reading response."""
+
+    id: int
+    timestamp: datetime
+
+    class Config:
+        """Pydantic config."""
+
+        from_attributes = True
+
+
+class BloodPressureReadingList(BaseModel):
+    """Schema for a list of blood pressure readings."""
+
+    readings: List[BloodPressureReading]
+</file>
+
+<file path=".gitignore">
+# Python virtual environment
+.venv/
+venv/
+ENV/
+
+# Python byte-compiled files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Distribution / packaging
+dist/
+build/
+*.egg-info/
+
+# IDE settings
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Environment variables
+.env
+.env.local
+
+# Logs
+*.log
+
+# Unit test / coverage reports
+htmlcov/
+.tox/
+.coverage
+.coverage.*
+.cache
+coverage.xml
+*.cover
+
+# UV package manager
+.uv/
+/backend.pid
+/pg.id
+</file>
+
+<file path="pyproject.toml">
+[project]
+name = "bptracker-backend"
+version = "0.1.0"
+description = "Backend API for BPTracker app"
+requires-python = ">=3.8"
+readme = "README.md"
+dependencies = [
+    "fastapi>=0.100.0",
+    "uvicorn>=0.23.0",
+    "sqlalchemy>=2.0.0",
+    "pydantic>=2.0.0",
+    "python-dotenv>=1.0.0",
+    "python-multipart>=0.0.6",
+    "fastapi-cli>=0.0.7",
+    "psycopg2-binary>=2.9.0",
+]
+
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[tool.ruff]
+line-length = 100
+target-version = "py38"
+
+[tool.uv]
+package = false
+</file>
+
+<file path="README.md">
+NOTE: this was built almost entirely by Cline (with Claude 3.7 Sonnet). The intent was to test Cline's agentic capabilities. Conclusion: they are quite impressive! "Meesa likes!"
+
+# BPTracker Backend
+
+A FastAPI backend for the [BPTracker application](git@github.com:dudeinthemirror/bptracker.git) that stores blood pressure readings in a PostgreSQL database.
+
+## Features
+
+- Store blood pressure readings (systolic, diastolic, heart rate)
+- Retrieve readings with pagination and sorting
+- Delete individual readings or all readings
+- PostgreSQL database for data persistence
+- CORS support for frontend integration
+
+## Requirements
+
+- Python 3.8 or higher
+- Dependencies listed in pyproject.toml
+
+## Installation
+
+1. Clone the repository:
+
+```bash
+git clone <repository-url>
+cd bptracker-backend
+```
+
+2. Install dependencies using uv:
+
+```bash
+uv sync
+```
+
+## Running the Server
+
+The project includes a convenient script to manage both the PostgreSQL database and the API server. Use the following command to start both services:
+
+```bash
+python scripts/local_server.py start
+```
+
+The API will be available at http://127.0.0.1:8078
+
+You can also use the script to:
+
+- Stop all services: `python scripts/local_server.py stop`
+- Restart all services: `python scripts/local_server.py restart`
+- Check service status: `python scripts/local_server.py status`
+- View all available commands: `python scripts/local_server.py --help`
+
+## API Documentation
+
+Once the server is running, you can access the interactive API documentation at:
+
+- Swagger UI: http://localhost:8078/docs
+- ReDoc: http://localhost:8078/redoc
+
+## API Endpoints
+
+- `GET /`: Root endpoint, returns status
+- `GET /health`: Health check endpoint
+- `GET /readings`: Get all readings with pagination
+- `POST /readings`: Create a new reading
+- `GET /readings/{reading_id}`: Get a specific reading
+- `DELETE /readings/{reading_id}`: Delete a specific reading
+- `DELETE /readings`: Delete all readings
+
+## Database
+
+The application uses PostgreSQL for data storage. You'll need to set up a PostgreSQL database and configure the connection using environment variables.
+
+### PostgreSQL Setup
+
+1. Install PostgreSQL if you haven't already:
+   - On Ubuntu: `sudo apt install postgresql postgresql-contrib`
+   - On macOS with Homebrew: `brew install postgresql`
+   - On Windows: Download from [postgresql.org](https://www.postgresql.org/download/windows/)
+
+2. Create a database for the application:
+   ```sql
+   CREATE DATABASE bptracker;
+   ```
+
+3. Configure environment variables:
+   - Edit the `.env` file with your PostgreSQL credentials
+
+The application will use the environment variables to connect to your PostgreSQL database when it starts.
+
+### Database Management
+
+The `local_server.py` script handles PostgreSQL database management automatically. It uses `pg_ctl` to control the PostgreSQL server:
+
+```bash
+# Start PostgreSQL and the API server
+python scripts/local_server.py start
+
+# Stop PostgreSQL and the API server
+python scripts/local_server.py stop
+
+# Check if PostgreSQL and the API server are running
+python scripts/local_server.py status
+```
+
+If you don't have PostgreSQL installed, run `brew install postgresql@14` first.
+
+For more detailed information about the script's commands:
+
+```bash
+python scripts/local_server.py --help
+```
+
+### Migrating from SQLite to PostgreSQL
+
+If you have existing data in the SQLite database and want to migrate it to PostgreSQL:
+
+1. Set up your PostgreSQL database as described above
+2. Make sure your `.env` file is configured correctly
+3. Run the migration script:
+
+```bash
+python scripts/migrate_sqlite_to_postgres.py
+```
+
+This script will transfer all blood pressure readings from the SQLite database (`bptracker.db`) to your PostgreSQL database and update the sequence for the primary key.
+
+If you need to manually update the sequence for the primary key (for example, if you're experiencing primary key conflicts), you can run:
+
+```sql
+SELECT setval('blood_pressure_readings_id_seq', (SELECT MAX(id) FROM blood_pressure_readings));
+```
+</file>
+
+</files>
